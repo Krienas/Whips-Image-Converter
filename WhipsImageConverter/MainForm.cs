@@ -13,6 +13,7 @@ using System.IO;
 using System.Numerics;
 using System.Net.Http;
 using System.Net;
+using System.Drawing.Drawing2D;
 
 /*
 Color3 method adapted from user dacwe on StackExchange 
@@ -27,12 +28,13 @@ http://www.efg2.com/Lab/Library/ImageProcessing/DHALF.TXT
 
 namespace WhipsImageConverter
 {
-    public partial class ImageToLCD : Form
+    public partial class MainForm : Form
     {
-        const string myVersionString = "1.1.4.4";
-        const string buildDateString = "11/18/17";
+        const string myVersionString = "1.1.6.1";
+        const string buildDateString = "10/6/18";
         const string githubVersionUrl = "https://github.com/Whiplash141/Whips-Image-Converter/releases/latest";
 
+        #region Member fields
         string formTitle = $"Whip's Image Converter (Version {myVersionString} - {buildDateString})";
         string fileDirectory = "";
 
@@ -58,8 +60,25 @@ namespace WhipsImageConverter
         Dictionary<int, Color3> paletteColorDictionary = new Dictionary<int, Color3>(512);
 
         Color backgroundColor = Color.FromArgb(0, 0, 0);
+        int backgroundColorPacked = (255 << 24);
 
         const double bitSpacing = 255.0 / 7.0;
+
+        const char transparencyFake = '#';
+
+        string spacer = "" + '\uE075' + '\uE072' + '\uE070';
+        string spacer2 = "" + '\ue076' + '\ue073' + '\ue071';
+        string spacer4 = "" + '\ue076' + '\ue076' + '\ue074' + '\ue072';
+        string spacer8 = "" + '\ue078' + '\ue075' + '\ue073';
+        string spacer178 = new string('\ue078', 25) + '\ue077' + '\ue075' + '\ue074' + '\ue073' + '\ue071';
+
+        string trans = transparencyFake.ToString();
+        string trans2 = new string(transparencyFake, 2);
+        string trans4 = new string(transparencyFake, 4);
+        string trans8 = new string(transparencyFake, 8);
+        string trans178 = new string(transparencyFake, 178);
+        StringBuilder sb = new StringBuilder();
+        #endregion
 
         //Color3 Class Definition
         public struct Color3
@@ -67,6 +86,7 @@ namespace WhipsImageConverter
             public readonly int R;
             public readonly int G;
             public readonly int B;
+            public readonly int A;
             public readonly int Packed;
 
             public Color3(int R, int G, int B)
@@ -74,6 +94,16 @@ namespace WhipsImageConverter
                 this.R = R;
                 this.G = G;
                 this.B = B;
+                this.A = 255;
+                this.Packed = (255 << 24) | (ClampColor(R) << 16) | (ClampColor(G) << 8) | ClampColor(B);
+            }
+
+            public Color3(int R, int G, int B, int A)
+            {
+                this.R = R;
+                this.G = G;
+                this.B = B;
+                this.A = A; //I only care about full transparency
                 this.Packed = (255 << 24) | (ClampColor(R) << 16) | (ClampColor(G) << 8) | ClampColor(B);
             }
 
@@ -106,41 +136,43 @@ namespace WhipsImageConverter
 
             public static Color3 operator -(Color3 color1, Color3 color2)
             {
-                return new Color3(color1.R - color2.R, color1.G - color2.G, color1.B - color2.B);
+                //return new Color3(color1.R - color2.R, color1.G - color2.G, color1.B - color2.B);
+                return color1 + -1 * color2;
             }
 
             public static Color3 operator +(Color3 color1, Color3 color2)
             {
-                return new Color3(color1.R + color2.R, color1.G + color2.G, color1.B + color2.B);
+                return new Color3(color1.R + color2.R, color1.G + color2.G, color1.B + color2.B, color1.A);
             }
 
             public static Color3 operator *(Color3 color, float multiplier)
             {
-                return new Color3((int)Math.Round(color.R * multiplier), (int)Math.Round(color.G * multiplier), (int)Math.Round(color.B * multiplier));
+                return new Color3((int)Math.Round(color.R * multiplier), (int)Math.Round(color.G * multiplier), (int)Math.Round(color.B * multiplier), color.A);
             }
 
             public static Color3 operator *(float multiplier, Color3 color)
             {
-                return new Color3((int)Math.Round(color.R * multiplier), (int)Math.Round(color.G * multiplier), (int)Math.Round(color.B * multiplier));
+                return new Color3((int)Math.Round(color.R * multiplier), (int)Math.Round(color.G * multiplier), (int)Math.Round(color.B * multiplier), color.A);
             }
 
             public static Color3 operator /(float dividend, Color3 color)
             {
-                return new Color3((int)Math.Round(dividend / color.R), (int)Math.Round(dividend / color.G), (int)Math.Round(dividend / color.B));
+                return new Color3((int)Math.Round(dividend / color.R), (int)Math.Round(dividend / color.G), (int)Math.Round(dividend / color.B), color.A);
             }
 
             public static Color3 operator /(Color3 color, float dividend)
             {
-                return new Color3((int)Math.Round(color.R / dividend), (int)Math.Round(color.G / dividend), (int)Math.Round(color.B / dividend));
+                return new Color3((int)Math.Round(color.R / dividend), (int)Math.Round(color.G / dividend), (int)Math.Round(color.B / dividend), color.A);
             }
         }
 
-        public ImageToLCD()
+        public MainForm()
         {
             InitializeComponent();
             combobox_dither.SelectedIndex = 0;
             combobox_resize.SelectedIndex = 0;
             openFileDialog1.Filter = "Image files (*.jpg, *.jpeg, *.jpe, *.jfif, *.png, *.bmp) | *.jpg; *.jpeg; *.jpe; *.jfif; *.png; *.bmp";
+            CheckBackgroundColorEnabled();
 
             //Set form name
             this.Text = formTitle;
@@ -152,6 +184,19 @@ namespace WhipsImageConverter
             ConstructColorMap();
         }
 
+        /// <summary>
+        /// Colors main form with a gradient.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void OnMainFormPaint(object sender, PaintEventArgs e)
+        {
+            Graphics graphics = e.Graphics;
+            Rectangle gradient_rectangle = new Rectangle(0, 0, this.Width, this.Height);
+            Brush b = new LinearGradientBrush(gradient_rectangle, Color.FromArgb(0, 0, 0), Color.FromArgb(80, 0, 0), 45f);
+            graphics.FillRectangle(b, gradient_rectangle);
+        }
+
         #region Update Checking
         void StartUpdateBackgroundWorker()
         {
@@ -161,7 +206,7 @@ namespace WhipsImageConverter
             }
         }
 
-        private void backgroundWorkerUpdate_DoWork(object sender, DoWorkEventArgs e)
+        private void OnBackgroundWorkerUpdateDoWork(object sender, DoWorkEventArgs e)
         {
             CheckForUpdates();
         }
@@ -251,9 +296,7 @@ namespace WhipsImageConverter
             if (getBaseImage)
                 baseImage = (Bitmap)Image.FromFile(fileDirectory, true);
 
-            bool maintainAspectRatio = checkBox_aspectratio.Checked; //default is false
-
-            if (!maintainAspectRatio)
+            if (!checkBox_aspectratio.Checked)
             {
                 squareImage = new Bitmap(baseImage, 178, 178);
                 rectangleImage = new Bitmap(baseImage, 356, 178);
@@ -282,8 +325,12 @@ namespace WhipsImageConverter
 
             //Change background color of the image
             //method from https://stackoverflow.com/a/1720261
+            var thisColor = backgroundColor;
+            if (checkBoxTransparency.Checked)
+                thisColor = Color.FromArgb(0, backgroundColor.R, backgroundColor.G, backgroundColor.B);
+
             using (Graphics gfx = Graphics.FromImage(framedImage))
-            using (SolidBrush brush = new SolidBrush(backgroundColor))
+            using (SolidBrush brush = new SolidBrush(thisColor))
             {
                 gfx.FillRectangle(brush, 0, 0, width, height);
             }
@@ -364,7 +411,7 @@ namespace WhipsImageConverter
             }
 
             label_stringLength.Text = "String Length: 0";
-            textBox_Return.Text = "";
+            textBox_Return.Clear();
 
             desiredImage = baseImage;
             
@@ -432,6 +479,19 @@ namespace WhipsImageConverter
             //Create encoded string
             string convertedImageString = BuildFinalString(convertedColorArray, imageWidth, imageHeight);
 
+            if (checkBoxTransparency.Checked)
+            {
+                convertedImageString = convertedImageString.Replace(trans178, spacer178);
+                convertedImageString = convertedImageString.Replace(trans8, spacer8);
+                convertedImageString = convertedImageString.Replace(trans4, spacer4);
+                convertedImageString = convertedImageString.Replace(trans2, spacer2);
+                convertedImageString = convertedImageString.Replace(trans, spacer);
+            }
+            else
+            {
+                convertedImageString = convertedImageString.Replace(transparencyFake, '\ue100');
+            }
+
             //Display converted image and encoded string
             textBox_Return.Text = convertedImageString;
 
@@ -441,7 +501,7 @@ namespace WhipsImageConverter
 
         public Color3 ColorToColor3(Color regularColor)
         {
-            return new Color3(regularColor.R, regularColor.G, regularColor.B);
+            return new Color3(regularColor.R, regularColor.G, regularColor.B, regularColor.A);
         }
 
         int[,] GetDitherFilter(int type)
@@ -554,24 +614,11 @@ namespace WhipsImageConverter
 
             Color3[,] initialColorArray = new Color3[height, width];
 
-            /*
-            BitmapData data = image.LockBits(new Rectangle(Point.Empty, image.Size), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-            int lineWidth = data.Stride / 4;
-            int[] pixelData = new int[lineWidth * data.Height];
-            Marshal.Copy(data.Scan0, pixelData, 0, pixelData.Length);
-            image.UnlockBits(data);
-            */
-
             for (int row = 0; row < height; row++)
             {
                 for (int col = 0; col < width; col++)
                 {
                     initialColorArray[row, col] = ColorToColor3(image.GetPixel(col, row));
-                    /*
-                    int position = lineWidth * row + col;
-                    var pixel = pixelData[position];
-                    initialColorArray[row, col] = new Color3((byte)(pixel >> 16), (byte)(pixel >> 8), (byte)pixel);
-                    */
                 }
             }
 
@@ -585,9 +632,19 @@ namespace WhipsImageConverter
                 {
                     var oldColor = initialColorArray[row, col];
                     var newColor = GetClosestColorFast(oldColor);
-                    convertedColorArray[row, col] = newColor.Packed;
+                    var error = oldColor - newColor;
 
-                    Color3 error = oldColor - newColor;
+                    if (oldColor.A < 36)
+                    {
+                        if (checkBoxTransparency.Checked)
+                            convertedColorArray[row, col] = -141;
+                        else
+                            convertedColorArray[row, col] = backgroundColorPacked;
+
+                        error = new Color3(0, 0, 0, 0);
+                    }
+                    else
+                        convertedColorArray[row, col] = newColor.Packed;
 
                     for (int i = 0; i < filterArray.GetLength(0); i++) //iterate through each row
                     {
@@ -632,7 +689,15 @@ namespace WhipsImageConverter
                 for (int col = 0; col < width; col++)
                 {
                     var pixelColor = initialColorArray[row, col];
-                    convertedColorArray[row, col] = GetClosestColorFast(pixelColor).Packed;
+                    if (pixelColor.A < 36) //and check rgb too
+                    {
+                        if (checkBoxTransparency.Checked)
+                            convertedColorArray[row, col] = -141;
+                        else
+                            convertedColorArray[row, col] = backgroundColorPacked;
+                    }
+                    else
+                        convertedColorArray[row, col] = GetClosestColorFast(pixelColor).Packed;
 
                     if (progressBarForm.DialogResult != DialogResult.Abort)
                         backgroundWorkerDithering.ReportProgress(GetPercentCompletion(height, width, row, col));
@@ -660,7 +725,7 @@ namespace WhipsImageConverter
 
         Color3 GetClosestColorFast(Color3 pixelColor)
         {
-            Color3 paletteColor;
+            Color3 paletteColor = new Color3(0, 0, 0);
 
             if (!paletteColorDictionary.TryGetValue(pixelColor.Packed, out paletteColor))
             {
@@ -681,32 +746,11 @@ namespace WhipsImageConverter
             return new Color3(R, G, B);
         }
 
-        /*Color3 GetClosestColor(Color3 pixelColor)
-        {
-            var leastDiff = 10000000f;
-            var leastIndex = -1;
-
-            for (int i = 0; i < paletteColors.Count; i++)
-            {
-                var comparisonColor = paletteColors[i];
-                var thisDiff = pixelColor.Diff(comparisonColor);
-
-                if (thisDiff < leastDiff)
-                {
-                    leastIndex = i;
-                    leastDiff = thisDiff;
-                }
-            }
-
-            return paletteColors[leastIndex];
-        }*/
-
         char ColorToChar(byte r, byte g, byte b)
         {
             return (char)(0xe100 + ((int)Math.Round(r / bitSpacing) << 6) + ((int)Math.Round(g / bitSpacing) << 3) + (int)Math.Round(b / bitSpacing));
         }
 
-        StringBuilder sb = new StringBuilder();
         string BuildFinalString(int[,] colorArray, int width, int height)
         {
             sb.Clear();
@@ -715,9 +759,11 @@ namespace WhipsImageConverter
                 for (int col = 0; col < width; col++)
                 {
                     var thisColor = colorArray[row, col];
-                    var colorChar = ColorToChar((byte)(thisColor >> 16), (byte)(thisColor >> 8), (byte)thisColor);
-                    //string colorGlyph = ".";
-                    //colorGlyphs.TryGetValue(colorInt, out colorGlyph);
+                    char colorChar;
+                    if (thisColor == -141)
+                        colorChar = transparencyFake;
+                    else
+                        colorChar = ColorToChar((byte)(thisColor >> 16), (byte)(thisColor >> 8), (byte)thisColor);
                     sb.Append(colorChar);
                 }
 
@@ -725,7 +771,7 @@ namespace WhipsImageConverter
                     sb.Append("\n");
             }
 
-            sb.Append($"Converted with Whip's Image Converter - Version {myVersionString}");
+            sb.Append($"WIC v{myVersionString} - Dither mode: {combobox_dither.SelectedItem} - {imageWidth}x{imageHeight} px");
             return sb.ToString();
         }
 
@@ -746,10 +792,16 @@ namespace WhipsImageConverter
         
         private Color IntToColor(int integer)
         {
+            if (integer == -141)
+            {
+                return Color.Transparent;
+                //backgroundColor
+            }
+
             return Color.FromArgb(integer);
         }
 
-        #region Running the mathy crap in another thread
+        #region Image Dithering
         void StartDitheringBackgroundWorker(int type)
         {
             this.Enabled = false;
@@ -762,7 +814,7 @@ namespace WhipsImageConverter
             progressBarForm.ShowDialog();
         }
 
-        private void backgroundWorkerDithering_DoWork(object sender, DoWorkEventArgs e)
+        private void OnBackgroundWorkerDitheringDoWork(object sender, DoWorkEventArgs e)
         {
             if (backgroundWorkerDithering.CancellationPending)
             {
@@ -780,12 +832,12 @@ namespace WhipsImageConverter
             }
         }
 
-        private void backgroundWorkerDithering_ProgressChanged(object sender, ProgressChangedEventArgs e)
+        private void OnBackgroundWorkerDitheringProgressChanged(object sender, ProgressChangedEventArgs e)
         {
             progressBarForm.SetProgressBarValue(e.ProgressPercentage);
         }
 
-        private void backgroundWorkerDithering_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
+        private void OnBackgroundWorkerDitheringRunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
             progressBarForm.Close();
             this.Enabled = true;
@@ -795,7 +847,31 @@ namespace WhipsImageConverter
         }
         #endregion
 
-        #region Windows Forms Interface Methods
+        #region Image Invert
+        void StartInvertBackgroundWorker()
+        {
+            if (baseImage == null)
+                return;
+
+            this.Enabled = false;
+
+            if (!backgroundWorkerInvert.IsBusy)
+                backgroundWorkerInvert.RunWorkerAsync();
+        }
+
+        private void OnBackgroundWorkerInvertDoWork(object sender, DoWorkEventArgs e)
+        {
+            InvertImageColors();
+        }
+
+        private void OnBackgroundWorkerInvertRunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
+        {
+            CacheImages(false); //cache images
+            DitherImage(); //image dithering
+        }
+        #endregion
+
+        #region Event Driven Actions
         void RotateImage(bool clockwise)
         {
             if (baseImage == null)
@@ -814,19 +890,25 @@ namespace WhipsImageConverter
             DitherImage(); //rotated image dithering
         }
 
-        /*
-        private void button_Convert_Click(object sender, EventArgs e)
+        void InvertImageColors()
         {
-            ConvertImage();
+            for (int i = 0; i < baseImage.Height; i++)
+            {
+                for (int j = 0; j < baseImage.Width; j++)
+                {
+                    var pixel = ColorToColor3(baseImage.GetPixel(j, i));
+                    var invertedPixel = new Color3(255, 255, 255) - pixel;
+                    baseImage.SetPixel(j, i, invertedPixel.ToColor());
+                }
+            }
         }
-        */
 
         private void BrowseButton_Click(object sender, EventArgs e)
         {
             openFileDialog1.ShowDialog(); // Show the dialog.
         }
 
-        private void button_Clipboard_Click(object sender, EventArgs e)
+        private void OnButtonClipboardClick(object sender, EventArgs e)
         {
             ConvertImage();
 
@@ -842,35 +924,35 @@ namespace WhipsImageConverter
             }
         }
 
-        private void linkLabel_Credits_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        private void OnLinkLabelCreditsClick(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            var creditsPopup = new popup_credits();
-            creditsPopup.Show();
+            var creditsPopup = new CreditsForm();
+            creditsPopup.ShowDialog();
         }
 
-        private void linkLabel_Dithering_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        private void OnLinkLabelDitheringClick(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            var popupForm = new DitheringPopup(1);
-            popupForm.Show();
+            var popupForm = new DitheringForm(1);
+            popupForm.ShowDialog();
         }
 
-        private void linkLabel_Dithering2_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        private void OnLinkLabelDithering2Click(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            var popupForm = new DitheringPopup(2);
-            popupForm.Show();
+            var popupForm = new DitheringForm(2);
+            popupForm.ShowDialog();
         }
 
-        private void ImagePreviewBox_Click(object sender, EventArgs e)
+        private void OnImagePreviewBoxClick(object sender, EventArgs e)
         {
             if (ImagePreviewBox.Image != null)
             {
-                var popup_image = new popup_imagebox((Bitmap)ImagePreviewBox.Image);
-                popup_image.Show();
+                var popup_image = new EnlargedImageForm((Bitmap)ImagePreviewBox.Image);
+                popup_image.ShowDialog();
             }
         }
 
         bool newImageLoaded = false;
-        private void openFileDialog1_FileOk(object sender, CancelEventArgs e)
+        private void OnOpenFileDialogFileOk(object sender, CancelEventArgs e)
         {
             newImageLoaded = true;
             textBox_FileDirectory.Text = openFileDialog1.FileName;
@@ -889,17 +971,19 @@ namespace WhipsImageConverter
             newImageLoaded = false;
         }
 
-        private void combobox_dither_SelectedIndexChanged(object sender, EventArgs e)
+        private void OnComboboxDitherSelectedIndexChanged(object sender, EventArgs e)
         {
             //reset return string
             textBox_Return.Clear();
             label_stringLength.Text = "String Length: 0";
 
             if (!newImageLoaded)
+            {
                 DitherImage();
+            }
         }
 
-        private void combobox_resize_SelectedIndexChanged(object sender, EventArgs e)
+        private void OnComboboxResizeSelectedIndexChanged(object sender, EventArgs e)
         {
             //reset return string
             textBox_Return.Clear();
@@ -953,30 +1037,31 @@ namespace WhipsImageConverter
                 DitherImage();
         }
 
-        private void checkBox_aspectratio_CheckedChanged(object sender, EventArgs e)
+        private void OnCheckBoxAspectRatioCheckedChanged(object sender, EventArgs e)
         {
             //reset return string
             textBox_Return.Clear();
 
             //enable or disable background color selector
-            button_background_color.Enabled = checkBox_aspectratio.Checked;
-            pictureBox_background_color.Enabled = checkBox_aspectratio.Checked;
+            //button_background_color.Enabled = checkBox_aspectratio.Checked;
+            //pictureBox_background_color.Enabled = checkBox_aspectratio.Checked;
+            CheckBackgroundColorEnabled();
 
             CacheImages();
             DitherImage();
         }
 
-        private void buttonRotateCCW_Click(object sender, EventArgs e)
+        private void OnButtonRotateCCWClick(object sender, EventArgs e)
         {
             RotateImage(false);
         }
 
-        private void buttonRotateCW_Click(object sender, EventArgs e)
+        private void OnButtonRotateCWClick(object sender, EventArgs e)
         {
             RotateImage(true);
         }
 
-        private void buttonFlipHorizontal_Click(object sender, EventArgs e)
+        private void OnButtonFlipHorizontalClick(object sender, EventArgs e)
         {
             if (baseImage == null)
                 return;
@@ -987,7 +1072,7 @@ namespace WhipsImageConverter
             DitherImage(); //rotated image dithering
         }
 
-        private void buttonFlipVertical_Click(object sender, EventArgs e)
+        private void OnButtonFlipVerticalClick(object sender, EventArgs e)
         {
             if (baseImage == null)
                 return;
@@ -1008,7 +1093,7 @@ namespace WhipsImageConverter
             }
         }
 
-        private void buttonUpdateResolution_Click(object sender, EventArgs e)
+        private void OnButtonUpdateResolutionClick(object sender, EventArgs e)
         {
             if (combobox_resize.SelectedIndex == 4)
             {
@@ -1016,12 +1101,12 @@ namespace WhipsImageConverter
             }
         }
 
-        private void button_background_color_Click(object sender, EventArgs e)
+        private void OnButtonBackgroundColorClick(object sender, EventArgs e)
         {
             BackgroundColorButtonPressed();
         }
 
-        private void pictureBox_background_color_Click(object sender, EventArgs e)
+        private void OnPictureBoxBackgroundColorClick(object sender, EventArgs e)
         {
             BackgroundColorButtonPressed();
         }
@@ -1032,6 +1117,7 @@ namespace WhipsImageConverter
             if (result == DialogResult.OK)
             {
                 backgroundColor = colorDialog1.Color;
+                backgroundColorPacked = ColorToColor3(backgroundColor).Packed;
 
                 pictureBox_background_color.BackColor = backgroundColor;
 
@@ -1041,15 +1127,37 @@ namespace WhipsImageConverter
                 //Redraw image
                 if (imageLoaded)
                 {
-                    CacheImages();
+                    CacheImages(false);
                     DitherImage();
                 }
             }
         }
 
-        private void linkLabel_GitHub_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        private void OnLinkLabelGitHubClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
             System.Diagnostics.Process.Start(githubVersionUrl);
+        }
+
+        private void OnButtonInvertColorsClick(object sender, EventArgs e)
+        {
+            StartInvertBackgroundWorker();
+        }
+
+        private void OnCheckBoxTransparencyCheckedChanged(object sender, EventArgs e)
+        {
+            textBox_Return.Clear();
+            label_stringLength.Text = "String Length: 0";
+            CheckBackgroundColorEnabled();
+
+            CacheImages(false);
+            DitherImage();
+        }
+
+        void CheckBackgroundColorEnabled()
+        {
+            bool enabled = (checkBox_aspectratio.Checked && !checkBoxTransparency.Checked);
+            button_background_color.Enabled = enabled;
+            pictureBox_background_color.Enabled = enabled;
         }
         #endregion
     }
